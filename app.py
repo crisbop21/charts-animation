@@ -18,6 +18,7 @@ from data import (
     generate_regional_sales,
     generate_funnel_data,
 )
+from export import plotly_fig_to_mp4
 
 # ---------------------------------------------------------------------------
 # Page config & corporate theme
@@ -106,6 +107,40 @@ def apply_corporate_style(fig: go.Figure, tiktok: bool = False) -> go.Figure:
         fig.update_xaxes(gridcolor="#e9ecef", gridwidth=0.5)
         fig.update_yaxes(gridcolor="#e9ecef", gridwidth=0.5)
     return fig
+
+
+def _download_section(
+    fig: go.Figure, key: str, filename: str, frame_duration_ms: int, tiktok: bool,
+):
+    """Show 'Generate MP4' button and, once ready, a download button."""
+    width, height = (1080, 1920) if tiktok else (1280, 720)
+
+    if st.button("Generate MP4", key=f"gen_{key}"):
+        bar = st.progress(0, text="Rendering frames...")
+        try:
+            mp4_data = plotly_fig_to_mp4(
+                fig,
+                frame_duration_ms=frame_duration_ms,
+                width=width,
+                height=height,
+                progress_cb=lambda p: bar.progress(
+                    p, text=f"Rendering frames... {int(p * 100)}%",
+                ),
+            )
+            st.session_state[f"mp4_{key}"] = mp4_data
+        except Exception as e:
+            st.error(f"MP4 generation failed: {e}")
+        finally:
+            bar.empty()
+
+    if st.session_state.get(f"mp4_{key}"):
+        st.download_button(
+            "Download MP4",
+            st.session_state[f"mp4_{key}"],
+            file_name=filename,
+            mime="video/mp4",
+            key=f"dl_{key}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +291,7 @@ if "Revenue Growth Animation" in sections:
     )
     apply_corporate_style(fig_rev, tiktok=tiktok_mode)
     st.plotly_chart(fig_rev, use_container_width=True)
+    _download_section(fig_rev, "revenue", "revenue_growth.mp4", animation_speed, tiktok_mode)
 
     if not tiktok_mode:
         with st.expander("View revenue data"):
@@ -339,6 +375,7 @@ if "Market Share Race" in sections:
     apply_corporate_style(fig_ms, tiktok=tiktok_mode)
     fig_ms.update_layout(colorway=_colors)
     st.plotly_chart(fig_ms, use_container_width=True)
+    _download_section(fig_ms, "market_share", "market_share_race.mp4", animation_speed, tiktok_mode)
     st.markdown("---")
 
 # ===================================================================
@@ -380,6 +417,7 @@ if "Employee Bubble Chart" in sections:
     )
     apply_corporate_style(fig_emp, tiktok=tiktok_mode)
     st.plotly_chart(fig_emp, use_container_width=True)
+    _download_section(fig_emp, "employee", "employee_bubble.mp4", animation_speed, tiktok_mode)
     st.markdown("---")
 
 # ===================================================================
@@ -422,6 +460,7 @@ if "Product KPI Scatter" in sections:
     )
     apply_corporate_style(fig_kpi, tiktok=tiktok_mode)
     st.plotly_chart(fig_kpi, use_container_width=True)
+    _download_section(fig_kpi, "product_kpi", "product_kpi.mp4", animation_speed, tiktok_mode)
     st.markdown("---")
 
 # ===================================================================
@@ -471,6 +510,7 @@ if "Regional Sales Bar Race" in sections:
     )
     apply_corporate_style(fig_bar, tiktok=tiktok_mode)
     st.plotly_chart(fig_bar, use_container_width=True)
+    _download_section(fig_bar, "bar_race", "regional_bar_race.mp4", animation_speed * 3, tiktok_mode)
     st.markdown("---")
 
 # ===================================================================
@@ -521,6 +561,7 @@ if "Sales Funnel Animation" in sections:
     )
     apply_corporate_style(fig_funnel, tiktok=tiktok_mode)
     st.plotly_chart(fig_funnel, use_container_width=True)
+    _download_section(fig_funnel, "funnel", "sales_funnel.mp4", animation_speed * 2, tiktok_mode)
 
 # ---------------------------------------------------------------------------
 # Footer
