@@ -115,32 +115,37 @@ def _download_section(
     """Show 'Generate MP4' button and, once ready, a download button."""
     width, height = (1080, 1920) if tiktok else (1280, 720)
 
-    if st.button("Generate MP4", key=f"gen_{key}"):
-        bar = st.progress(0, text="Rendering frames...")
-        try:
-            mp4_data = plotly_fig_to_mp4(
-                fig,
-                frame_duration_ms=frame_duration_ms,
-                width=width,
-                height=height,
-                progress_cb=lambda p: bar.progress(
-                    p, text=f"Rendering frames... {int(p * 100)}%",
-                ),
-            )
-            st.session_state[f"mp4_{key}"] = mp4_data
-        except Exception as e:
-            st.error(f"MP4 generation failed: {e}")
-        finally:
-            bar.empty()
+    with st.container(border=True):
+        col_label, col_btn = st.columns([3, 1])
+        col_label.markdown("**Export this animation as MP4 video**")
 
-    if st.session_state.get(f"mp4_{key}"):
-        st.download_button(
-            "Download MP4",
-            st.session_state[f"mp4_{key}"],
-            file_name=filename,
-            mime="video/mp4",
-            key=f"dl_{key}",
-        )
+        if col_btn.button("Generate MP4", key=f"gen_{key}", use_container_width=True):
+            bar = st.progress(0, text="Rendering frames...")
+            try:
+                mp4_data = plotly_fig_to_mp4(
+                    fig,
+                    frame_duration_ms=frame_duration_ms,
+                    width=width,
+                    height=height,
+                    progress_cb=lambda p: bar.progress(
+                        p, text=f"Rendering frames... {int(p * 100)}%",
+                    ),
+                )
+                st.session_state[f"mp4_{key}"] = mp4_data
+            except Exception as e:
+                st.error(f"MP4 generation failed: {e}")
+            finally:
+                bar.empty()
+
+        if st.session_state.get(f"mp4_{key}"):
+            st.download_button(
+                "Download MP4",
+                st.session_state[f"mp4_{key}"],
+                file_name=filename,
+                mime="video/mp4",
+                key=f"dl_{key}",
+                use_container_width=True,
+            )
 
 
 # ---------------------------------------------------------------------------
