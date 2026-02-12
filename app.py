@@ -26,6 +26,7 @@ from export import (
     product_kpi_to_mp4,
     bar_race_to_mp4,
     funnel_to_mp4,
+    user_chart_to_mp4,
 )
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,7 @@ def _build_user_chart(df: pd.DataFrame, config: dict, speed: int,
             color=config["color"], orientation="h",
             text=config["value"],
             title=f'{config["value"]} by {config["category"]}',
+            range_x=[0, df[config["value"]].max() * 1.15],
             **common,
         )
         fig.update_traces(texttemplate="%{text:.2s}", textposition="outside")
@@ -196,6 +198,7 @@ def _build_user_chart(df: pd.DataFrame, config: dict, speed: int,
         fig = px.line(
             df, x=config["x"], y=config["y"], color=config["color"],
             title=f'{config["y"]} over {config["x"]}',
+            range_y=[0, df[config["y"]].max() * 1.15],
             **common,
         )
         fig.update_layout(updatemenus=_play_pause_buttons(speed))
@@ -204,6 +207,7 @@ def _build_user_chart(df: pd.DataFrame, config: dict, speed: int,
         fig = px.area(
             df, x=config["x"], y=config["y"], color=config["color"],
             title=f'{config["y"]} over {config["x"]}',
+            range_y=[0, df[config["y"]].max() * 1.15],
             **common,
         )
         fig.update_layout(updatemenus=_play_pause_buttons(speed))
@@ -212,6 +216,8 @@ def _build_user_chart(df: pd.DataFrame, config: dict, speed: int,
         kw = dict(
             x=config["x"], y=config["y"], color=config["color"],
             title=f'{config["y"]} vs {config["x"]}',
+            range_x=[0, df[config["x"]].max() * 1.15],
+            range_y=[0, df[config["y"]].max() * 1.15],
             **common,
         )
         if config.get("size"):
@@ -328,6 +334,10 @@ sections: list[str] = []
 
 # ── Upload mode sidebar ──────────────────────────────────────────────
 if data_source == "Upload Your Data":
+    tiktok_mode = st.sidebar.toggle("Vertical Format (9:16)", value=False)
+    if tiktok_mode:
+        st.sidebar.caption("Dark theme, bold colors, vertical layout for video recording.")
+
     chart_type_label = st.sidebar.selectbox(
         "Chart Type",
         ["Bar Race", "Line Chart", "Area Chart", "Scatter / Bubble"],
@@ -415,6 +425,11 @@ else:
         h3 { color: #2E86AB; }
         .stMetric { background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
                     padding: 1rem; border-radius: 8px; border-left: 4px solid #2E86AB; }
+        [data-testid="stExpander"] { border: 1px solid #dee2e6; border-radius: 8px; }
+        [data-testid="stDownloadButton"] button {
+            background-color: #2E86AB; color: white; border: none; font-weight: 600; }
+        [data-testid="stDownloadButton"] button:hover {
+            background-color: #1B2A4A; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -422,29 +437,33 @@ else:
 # UPLOAD MODE – Custom chart from user data
 # ===================================================================
 if data_source == "Upload Your Data":
-    st.title("Chart Studio")
-    st.markdown(
-        "Create **animated visualizations** from your own data. "
-        "Download a CSV template, fill it in, and upload it back."
-    )
+    if tiktok_mode:
+        st.title("Chart Studio")
+    else:
+        st.title("Chart Studio")
+        st.markdown(
+            "Create **animated visualizations** from your own data. "
+            "Download a template, fill it in, and upload it back."
+        )
+
     st.markdown("---")
 
     # Template download section
-    template_csv = _generate_template_csv(chart_type_label)
-    fname = chart_type_label.lower().replace(" / ", "_").replace(" ", "_")
-    col_dl, col_info = st.columns([1, 3])
-    col_dl.download_button(
-        f"Download {chart_type_label} Template",
-        template_csv,
-        file_name=f"{fname}_template.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-    col_info.markdown(
-        f"Template columns: **{', '.join(_TEMPLATE_COLUMNS[chart_type_label])}**"
-    )
-
-    st.markdown("---")
+    with st.container(border=True):
+        template_csv = _generate_template_csv(chart_type_label)
+        fname = chart_type_label.lower().replace(" / ", "_").replace(" ", "_")
+        col_dl, col_info = st.columns([1, 2])
+        col_dl.download_button(
+            f"Download {chart_type_label} Template",
+            template_csv,
+            file_name=f"{fname}_template.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        col_info.markdown(
+            f"**Required columns:** {', '.join(_TEMPLATE_COLUMNS[chart_type_label])}\n\n"
+            "Fill the template with your data, keeping the column headers."
+        )
 
     if user_df is not None:
         # Validate required columns
@@ -458,26 +477,38 @@ if data_source == "Upload Your Data":
                 "Please download and use the template above."
             )
         else:
+            st.markdown("---")
+
             # Build and render chart
+            _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
             config = _config_for_chart_type(chart_type_label)
             try:
                 fig_user = _build_user_chart(
-                    user_df, config, animation_speed, CORPORATE_COLORS,
+                    user_df, config, animation_speed, _colors,
                 )
-                apply_corporate_style(fig_user, tiktok=False)
+                apply_corporate_style(fig_user, tiktok=tiktok_mode)
                 st.plotly_chart(fig_user, use_container_width=True, key="user_chart")
             except Exception as e:
                 st.error(f"Could not build chart: {e}")
 
-            st.dataframe(user_df, use_container_width=True, hide_index=True)
+            # MP4 download
+            _download_section(
+                "user_chart",
+                f"{fname}_animation.mp4",
+                partial(user_chart_to_mp4, user_df, config["type"], config,
+                        animation_speed, tiktok_mode),
+                tiktok_mode,
+            )
+
+            with st.expander("View data"):
+                st.dataframe(user_df, use_container_width=True, hide_index=True)
     else:
-        st.markdown(
-            "**How it works:**\n"
-            "1. Pick a chart type in the sidebar\n"
-            "2. Download the template above\n"
-            "3. Fill it with your data (keep the column headers)\n"
-            "4. Upload the file in the sidebar"
-        )
+        st.markdown("---")
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.markdown("**1.** Pick a chart type")
+        col_b.markdown("**2.** Download the template")
+        col_c.markdown("**3.** Fill it with your data")
+        col_d.markdown("**4.** Upload in the sidebar")
 
 # ===================================================================
 # DEMO MODE – Pre-built example charts

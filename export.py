@@ -288,3 +288,109 @@ def funnel_to_mp4(df, frame_duration_ms, tiktok, progress_cb=None):
     result = _render_to_mp4(fig, update, len(month_labels), fps, progress_cb)
     plt.close(fig)
     return result
+
+# ── 7. Generic export for user-uploaded template data ─────────────
+
+def user_chart_to_mp4(df, chart_type, config, frame_duration_ms, tiktok,
+                      progress_cb=None):
+    """Render an animated chart from user-uploaded template data as MP4.
+
+    *chart_type* is one of ``"bar"``, ``"line"``, ``"area"``, ``"scatter"``.
+    *config* is a column-mapping dict produced by ``_config_for_chart_type``.
+    """
+    colors, bg, text_c, grid_c = _theme(tiktok)
+    anim_col = config["animation"]
+    frame_vals = list(df[anim_col].unique())
+    fps = max(1, round(1000 / frame_duration_ms))
+
+    fig, ax = _new_fig(tiktok)
+
+    # Ensure string columns are truly strings (pandas may parse "NA" as NaN)
+    for col in [anim_col, config.get("category"), config.get("color")]:
+        if col and col in df.columns and df[col].dtype == object:
+            df[col] = df[col].astype(str)
+
+    if chart_type == "bar":
+        cat_col, val_col = config["category"], config["value"]
+        categories = df[cat_col].unique()
+        cat_colors = {c: colors[i % len(colors)] for i, c in enumerate(categories)}
+        max_x = df[val_col].max() * 1.2
+        fig.subplots_adjust(left=0.25, right=0.88)
+
+        def update(i):
+            ax.clear()
+            _style_ax(ax, tiktok, f"{val_col} by {cat_col}\n{frame_vals[i]}")
+            frame = df[df[anim_col] == frame_vals[i]].sort_values(val_col)
+            bars = ax.barh(frame[cat_col], frame[val_col],
+                           color=[cat_colors.get(c, colors[0]) for c in frame[cat_col]],
+                           height=0.55)
+            for bar, val in zip(bars, frame[val_col]):
+                ax.text(bar.get_width() + max_x * 0.01,
+                        bar.get_y() + bar.get_height() / 2,
+                        f"{val:,.0f}", va="center", color=text_c,
+                        fontsize=14 if tiktok else 11)
+            ax.set_xlim(0, max_x)
+            ax.set_xlabel(val_col, color=text_c, fontsize=12)
+            ax.xaxis.grid(True, color=grid_c, linewidth=0.5, alpha=0.5)
+
+    elif chart_type in ("line", "area"):
+        x_col, y_col, color_col = config["x"], config["y"], config["color"]
+        groups = df[color_col].unique()
+        group_colors = {g: colors[i % len(colors)] for i, g in enumerate(groups)}
+        max_y = df[y_col].max() * 1.15
+        lw = 3.5 if tiktok else 2.5
+
+        def update(i):
+            ax.clear()
+            _style_ax(ax, tiktok, f"{y_col} over {x_col}\n{frame_vals[i]}")
+            frame = df[df[anim_col] == frame_vals[i]]
+            for g in groups:
+                gdata = frame[frame[color_col] == g]
+                x_pos = list(range(len(gdata)))
+                y_vals = gdata[y_col].values
+                x_labels = gdata[x_col].values
+                if chart_type == "area":
+                    ax.fill_between(x_pos, y_vals,
+                                    color=group_colors[g], alpha=0.3)
+                ax.plot(x_pos, y_vals,
+                        color=group_colors[g], linewidth=lw,
+                        marker="o", markersize=5 if tiktok else 3, label=g)
+                ax.set_xticks(x_pos)
+                ax.set_xticklabels(x_labels, rotation=45, ha="right",
+                                   color=text_c)
+            ax.set_ylim(0, max_y)
+            ax.set_ylabel(y_col, color=text_c, fontsize=12)
+            ax.legend(fontsize=11 if tiktok else 9, facecolor=bg,
+                      edgecolor=grid_c, labelcolor=text_c, loc="upper left")
+
+    else:  # scatter
+        x_col, y_col, color_col = config["x"], config["y"], config["color"]
+        size_col = config.get("size")
+        groups = df[color_col].unique()
+        group_colors = {g: colors[i % len(colors)] for i, g in enumerate(groups)}
+        max_x = df[x_col].max() * 1.15
+        max_y = df[y_col].max() * 1.15
+
+        def update(i):
+            ax.clear()
+            _style_ax(ax, tiktok, f"{y_col} vs {x_col}\n{frame_vals[i]}")
+            frame = df[df[anim_col] == frame_vals[i]]
+            for g in groups:
+                gdata = frame[frame[color_col] == g]
+                if gdata.empty:
+                    continue
+                s = (gdata[size_col] * (8 if tiktok else 5)
+                     if size_col else (100 if tiktok else 60))
+                ax.scatter(gdata[x_col], gdata[y_col], s=s,
+                           color=group_colors[g], label=g,
+                           alpha=0.85, edgecolors="white", linewidth=0.5)
+            ax.set_xlim(0, max_x)
+            ax.set_ylim(0, max_y)
+            ax.set_xlabel(x_col, color=text_c, fontsize=12)
+            ax.set_ylabel(y_col, color=text_c, fontsize=12)
+            ax.legend(fontsize=10 if tiktok else 8, facecolor=bg,
+                      edgecolor=grid_c, labelcolor=text_c, loc="upper right")
+
+    result = _render_to_mp4(fig, update, len(frame_vals), fps, progress_cb)
+    plt.close(fig)
+    return result
