@@ -1,7 +1,7 @@
 """
-Animated Corporate Dashboard - Exploring Python Animation Capabilities
-======================================================================
-A Streamlit app showcasing animated Plotly charts with dummy corporate data.
+Chart Studio – Interactive Animated Data Visualizations
+=======================================================
+Upload your own data or explore pre-built animated chart examples.
 """
 
 import streamlit as st
@@ -32,8 +32,8 @@ from export import (
 # Page config & corporate theme
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Corporate Analytics Dashboard",
-    page_icon="",
+    page_title="Chart Studio",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -152,41 +152,218 @@ def _download_section(key: str, filename: str, export_fn, tiktok: bool):
             )
 
 
+def _play_pause_buttons(duration_ms, transition_ms=0):
+    """Return a Plotly updatemenus list with Play/Pause buttons."""
+    buttons = [
+        dict(label="Play", method="animate",
+             args=[None, {"frame": {"duration": duration_ms, "redraw": True},
+                          "fromcurrent": True,
+                          **({"transition": {"duration": transition_ms}} if transition_ms else {})}]),
+        dict(label="Pause", method="animate",
+             args=[[None], {"frame": {"duration": 0, "redraw": False},
+                            "mode": "immediate"}]),
+    ]
+    return [dict(type="buttons", showactive=False, y=1.15, x=0.5,
+                 xanchor="center", buttons=buttons)]
+
+
+def _build_user_chart(df: pd.DataFrame, config: dict, speed: int,
+                      colors: list) -> go.Figure:
+    """Build an animated Plotly chart from user data + column mapping config."""
+    ctype = config["type"]
+    common = dict(
+        animation_frame=config["animation"],
+        template=CORPORATE_TEMPLATE,
+        color_discrete_sequence=colors,
+    )
+
+    if ctype == "bar":
+        fig = px.bar(
+            df, x=config["value"], y=config["category"],
+            color=config["color"], orientation="h",
+            text=config["value"],
+            title=f'{config["value"]} by {config["category"]}',
+            **common,
+        )
+        fig.update_traces(texttemplate="%{text:.2s}", textposition="outside")
+        fig.update_layout(
+            yaxis=dict(categoryorder="total ascending"),
+            showlegend=False,
+            updatemenus=_play_pause_buttons(speed * 2, 300),
+        )
+
+    elif ctype == "line":
+        fig = px.line(
+            df, x=config["x"], y=config["y"], color=config["color"],
+            title=f'{config["y"]} over {config["x"]}',
+            **common,
+        )
+        fig.update_layout(updatemenus=_play_pause_buttons(speed))
+
+    elif ctype == "area":
+        fig = px.area(
+            df, x=config["x"], y=config["y"], color=config["color"],
+            title=f'{config["y"]} over {config["x"]}',
+            **common,
+        )
+        fig.update_layout(updatemenus=_play_pause_buttons(speed))
+
+    elif ctype == "scatter":
+        kw = dict(
+            x=config["x"], y=config["y"], color=config["color"],
+            title=f'{config["y"]} vs {config["x"]}',
+            **common,
+        )
+        if config.get("size"):
+            kw["size"] = config["size"]
+            kw["size_max"] = 45
+        fig = px.scatter(df, **kw)
+        fig.update_layout(updatemenus=_play_pause_buttons(speed))
+
+    else:
+        raise ValueError(f"Unknown chart type: {ctype}")
+
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
-st.sidebar.title("Dashboard Controls")
+st.sidebar.title("Chart Studio")
 st.sidebar.markdown("---")
-tiktok_mode = st.sidebar.toggle("TikTok Mode (9:16 vertical)", value=False)
-if tiktok_mode:
-    st.sidebar.caption(
-        "Optimized for screen recording: dark background, bold colors, "
-        "large text, vertical layout. Shows one chart at a time."
-    )
+
+data_source = st.sidebar.radio(
+    "Data Source",
+    ["Upload Your Data", "Example Charts"],
+    horizontal=True,
+)
+
 animation_speed = st.sidebar.slider(
-    "Animation speed (ms per frame)", 50, 500,
-    200 if tiktok_mode else 150, step=50,
+    "Animation speed (ms per frame)", 50, 500, 150, step=50,
 )
 st.sidebar.markdown("---")
 
-all_sections = [
-    "Revenue Growth Animation",
-    "Market Share Race",
-    "Employee Bubble Chart",
-    "Product KPI Scatter",
-    "Regional Sales Bar Race",
-    "Sales Funnel Animation",
-]
+# Variables shared across modes
+uploaded_file = None
+user_df = None
+chart_config: dict = {}
+tiktok_mode = False
+sections: list[str] = []
 
-if tiktok_mode:
-    selected_section = st.sidebar.radio("Chart to display", all_sections, index=4)
-    sections = [selected_section]
-else:
-    sections = st.sidebar.multiselect(
-        "Sections to display",
-        all_sections,
-        default=all_sections,
+# ── Upload mode sidebar ──────────────────────────────────────────────
+if data_source == "Upload Your Data":
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload a CSV or Excel file",
+        type=["csv", "xlsx", "xls"],
     )
+
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith((".xlsx", ".xls")):
+                user_df = pd.read_excel(uploaded_file)
+            else:
+                user_df = pd.read_csv(uploaded_file)
+            st.sidebar.success(
+                f"Loaded {len(user_df):,} rows, {len(user_df.columns)} columns"
+            )
+        except Exception as e:
+            st.sidebar.error(f"Could not parse file: {e}")
+            user_df = None
+
+    if user_df is not None:
+        all_cols = user_df.columns.tolist()
+        numeric_cols = user_df.select_dtypes(include="number").columns.tolist()
+
+        st.sidebar.subheader("Chart Builder")
+
+        chart_type_label = st.sidebar.selectbox(
+            "Chart Type",
+            ["Bar Race", "Line Chart", "Area Chart", "Scatter / Bubble"],
+        )
+
+        animation_col = st.sidebar.selectbox(
+            "Animation Frame",
+            all_cols,
+            help="Each unique value becomes one animation frame (e.g. Year, Month)",
+        )
+
+        remaining = [c for c in all_cols if c != animation_col]
+        remaining_numeric = [c for c in numeric_cols if c != animation_col]
+
+        if chart_type_label == "Bar Race":
+            category_col = st.sidebar.selectbox("Category (bars)", remaining)
+            value_col = st.sidebar.selectbox(
+                "Value (bar length)",
+                remaining_numeric if remaining_numeric else remaining,
+            )
+            color_col = st.sidebar.selectbox("Color by", remaining)
+            chart_config = dict(
+                type="bar", animation=animation_col,
+                category=category_col, value=value_col, color=color_col,
+            )
+
+        elif chart_type_label in ("Line Chart", "Area Chart"):
+            x_col = st.sidebar.selectbox("X Axis", remaining)
+            y_col = st.sidebar.selectbox(
+                "Y Axis",
+                remaining_numeric if remaining_numeric else remaining,
+            )
+            color_col = st.sidebar.selectbox("Color / Group", remaining)
+            chart_config = dict(
+                type="line" if chart_type_label == "Line Chart" else "area",
+                animation=animation_col, x=x_col, y=y_col, color=color_col,
+            )
+
+        elif chart_type_label == "Scatter / Bubble":
+            x_col = st.sidebar.selectbox(
+                "X Axis",
+                remaining_numeric if remaining_numeric else remaining,
+            )
+            y_options = [c for c in remaining_numeric if c != x_col]
+            if not y_options:
+                y_options = remaining_numeric if remaining_numeric else remaining
+            y_col = st.sidebar.selectbox("Y Axis", y_options)
+            color_col = st.sidebar.selectbox(
+                "Color",
+                remaining if remaining else all_cols,
+            )
+            size_options = ["None"] + [
+                c for c in remaining_numeric if c not in (x_col, y_col)
+            ]
+            size_col = st.sidebar.selectbox("Size (optional)", size_options)
+            chart_config = dict(
+                type="scatter", animation=animation_col,
+                x=x_col, y=y_col, color=color_col,
+                size=None if size_col == "None" else size_col,
+            )
+
+# ── Demo mode sidebar ────────────────────────────────────────────────
+else:
+    tiktok_mode = st.sidebar.toggle("TikTok Mode (9:16 vertical)", value=False)
+    if tiktok_mode:
+        st.sidebar.caption(
+            "Optimized for screen recording: dark background, bold colors, "
+            "large text, vertical layout. Shows one chart at a time."
+        )
+
+    all_sections = [
+        "Revenue Growth Animation",
+        "Market Share Race",
+        "Employee Bubble Chart",
+        "Product KPI Scatter",
+        "Regional Sales Bar Race",
+        "Sales Funnel Animation",
+    ]
+
+    if tiktok_mode:
+        selected_section = st.sidebar.radio("Chart to display", all_sections, index=4)
+        sections = [selected_section]
+    else:
+        sections = st.sidebar.multiselect(
+            "Sections to display",
+            all_sections,
+            default=all_sections,
+        )
 
 # ---------------------------------------------------------------------------
 # Custom CSS
@@ -223,116 +400,168 @@ else:
     </style>
     """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
-if tiktok_mode:
-    st.title("Analytics Dashboard")
-else:
-    st.title("Corporate Analytics Dashboard")
+# ===================================================================
+# UPLOAD MODE – Custom chart from user data
+# ===================================================================
+if data_source == "Upload Your Data":
+    st.title("Chart Studio")
     st.markdown(
-        "Exploring **animated Python visualizations** with Plotly + Streamlit. "
-        "Every chart below uses `animation_frame` or manual frame-based animation."
+        "Upload your data and create **animated visualizations** instantly. "
+        "Select a CSV or Excel file from the sidebar, map your columns, and press **Play**."
     )
+    st.markdown("---")
 
-# Quick KPIs
-rev_df = generate_quarterly_revenue()
-latest_year = rev_df["Year"].max()
-total_rev = rev_df[rev_df["Year"] == latest_year]["Revenue ($M)"].sum()
-prev_rev = rev_df[rev_df["Year"] == latest_year - 1]["Revenue ($M)"].sum()
-yoy = (total_rev - prev_rev) / prev_rev * 100
+    if user_df is not None and chart_config:
+        # Data preview
+        with st.expander("Preview uploaded data", expanded=False):
+            st.dataframe(user_df.head(100), use_container_width=True, hide_index=True)
 
-ms_df = generate_market_share()
-latest_share = ms_df[ms_df["Company"] == "Acme Corp"]["Market Share (%)"].iloc[-1]
+        # Build and render chart
+        try:
+            fig_user = _build_user_chart(
+                user_df, chart_config, animation_speed, CORPORATE_COLORS,
+            )
+            apply_corporate_style(fig_user, tiktok=False)
+            st.plotly_chart(fig_user, use_container_width=True, key="user_chart")
+        except Exception as e:
+            st.error(
+                f"Could not build chart: {e}\n\n"
+                "Make sure the selected columns are compatible with the chart type."
+            )
 
-emp_df = generate_employee_metrics()
-total_hc = emp_df.groupby("Quarter").last().groupby("Department")["Headcount"].last().sum()
+        st.info(
+            "**Tip:** For best results, structure your data with one row per item "
+            "per time period. The animation frame column should contain discrete "
+            "values like years, months, or categories."
+        )
 
-if tiktok_mode:
-    col1, col2 = st.columns(2)
-    col1.metric("FY Revenue", f"${total_rev:,.0f}M", f"{yoy:+.1f}% YoY")
-    col2.metric("Market Share", f"{latest_share:.1f}%", "+3.2pp")
+    elif uploaded_file is not None:
+        st.warning("Configure chart settings in the sidebar to generate a visualization.")
+    else:
+        st.info(
+            "Upload a CSV or Excel file from the sidebar to get started.\n\n"
+            "Your data should have:\n"
+            "- A **time or category column** for animation frames (e.g. Year, Month)\n"
+            "- One or more **numeric columns** for values\n"
+            "- A **grouping column** for colors (e.g. Region, Product)"
+        )
+
+# ===================================================================
+# DEMO MODE – Pre-built example charts
+# ===================================================================
 else:
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("FY Revenue", f"${total_rev:,.0f}M", f"{yoy:+.1f}% YoY")
-    col2.metric("Market Share (Acme)", f"{latest_share:.1f}%", "+3.2pp vs 2022")
-    col3.metric("Total Headcount", f"{total_hc:,}")
-    col4.metric("Business Units", "4", "")
+    # ------------------------------------------------------------------
+    # Header
+    # ------------------------------------------------------------------
+    if tiktok_mode:
+        st.title("Analytics Dashboard")
+    else:
+        st.title("Chart Studio — Examples")
+        st.markdown(
+            "Animated chart examples built with sample corporate data. "
+            "Switch to **Upload Your Data** in the sidebar to visualize your own datasets."
+        )
 
-st.markdown("---")
+    # Quick KPIs
+    rev_df = generate_quarterly_revenue()
+    latest_year = rev_df["Year"].max()
+    total_rev = rev_df[rev_df["Year"] == latest_year]["Revenue ($M)"].sum()
+    prev_rev = rev_df[rev_df["Year"] == latest_year - 1]["Revenue ($M)"].sum()
+    yoy = (total_rev - prev_rev) / prev_rev * 100
 
-# ===================================================================
-# 1. ANIMATED AREA CHART - Quarterly Revenue Growth
-# ===================================================================
-if "Revenue Growth Animation" in sections:
-    st.header("1 - Revenue Growth by Business Unit")
-    if not tiktok_mode:
-        st.caption("Animated area chart showing quarterly revenue evolution across business units. Press play to watch growth over time.")
+    ms_df = generate_market_share()
+    latest_share = ms_df[ms_df["Company"] == "Acme Corp"]["Market Share (%)"].iloc[-1]
 
-    _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
-    fig_rev = px.area(
-        rev_df,
-        x="Business Unit",
-        y="Revenue ($M)",
-        color="Business Unit",
-        animation_frame="Period",
-        range_y=[0, rev_df["Revenue ($M)"].max() * 1.15],
-        template=CORPORATE_TEMPLATE,
-        color_discrete_sequence=_colors,
-        title="Quarterly Revenue by Business Unit",
-    )
-    fig_rev.update_layout(
-        updatemenus=[dict(
-            type="buttons",
-            showactive=False,
-            y=1.15,
-            x=0.5,
-            xanchor="center",
-            buttons=[
-                dict(label="Play", method="animate",
-                     args=[None, {"frame": {"duration": animation_speed, "redraw": True},
-                                  "fromcurrent": True}]),
-                dict(label="Pause", method="animate",
-                     args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                    "mode": "immediate"}]),
-            ],
-        )],
-    )
-    apply_corporate_style(fig_rev, tiktok=tiktok_mode)
-    st.plotly_chart(fig_rev, use_container_width=True)
-    _download_section("revenue", "revenue_growth.mp4",
-                      partial(revenue_growth_to_mp4, rev_df, animation_speed, tiktok_mode),
-                      tiktok_mode)
+    emp_df = generate_employee_metrics()
+    total_hc = emp_df.groupby("Quarter").last().groupby("Department")["Headcount"].last().sum()
 
-    if not tiktok_mode:
-        with st.expander("View revenue data"):
-            st.dataframe(rev_df, use_container_width=True, hide_index=True)
+    if tiktok_mode:
+        col1, col2 = st.columns(2)
+        col1.metric("FY Revenue", f"${total_rev:,.0f}M", f"{yoy:+.1f}% YoY")
+        col2.metric("Market Share", f"{latest_share:.1f}%", "+3.2pp")
+    else:
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("FY Revenue", f"${total_rev:,.0f}M", f"{yoy:+.1f}% YoY")
+        col2.metric("Market Share (Acme)", f"{latest_share:.1f}%", "+3.2pp vs 2022")
+        col3.metric("Total Headcount", f"{total_hc:,}")
+        col4.metric("Business Units", "4", "")
 
     st.markdown("---")
 
-# ===================================================================
-# 2. ANIMATED LINE CHART - Market Share Race
-# ===================================================================
-if "Market Share Race" in sections:
-    st.header("2 - Market Share Race")
-    if not tiktok_mode:
-        st.caption("Animated line chart showing how market share shifts month-over-month across competitors.")
+    # ===================================================================
+    # 1. ANIMATED AREA CHART - Quarterly Revenue Growth
+    # ===================================================================
+    if "Revenue Growth Animation" in sections:
+        st.header("1 — Revenue Growth by Business Unit")
+        if not tiktok_mode:
+            st.caption("Animated area chart showing quarterly revenue evolution across business units.")
 
-    _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
-    _line_w = 5 if tiktok_mode else 3
-    _marker_s = 7 if tiktok_mode else 4
+        _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
+        fig_rev = px.area(
+            rev_df,
+            x="Business Unit",
+            y="Revenue ($M)",
+            color="Business Unit",
+            animation_frame="Period",
+            range_y=[0, rev_df["Revenue ($M)"].max() * 1.15],
+            template=CORPORATE_TEMPLATE,
+            color_discrete_sequence=_colors,
+            title="Quarterly Revenue by Business Unit",
+        )
+        fig_rev.update_layout(
+            updatemenus=_play_pause_buttons(animation_speed),
+        )
+        apply_corporate_style(fig_rev, tiktok=tiktok_mode)
+        st.plotly_chart(fig_rev, use_container_width=True)
+        _download_section("revenue", "revenue_growth.mp4",
+                          partial(revenue_growth_to_mp4, rev_df, animation_speed, tiktok_mode),
+                          tiktok_mode)
 
-    # Build frames manually for a cumulative line animation
-    months = ms_df["Month"].unique()
-    companies = ms_df["Company"].unique()
-    frames = []
-    for i in range(1, len(months) + 1):
-        subset = ms_df[ms_df["Month"].isin(months[:i])]
-        frames.append(go.Frame(
+        if not tiktok_mode:
+            with st.expander("View revenue data"):
+                st.dataframe(rev_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+    # ===================================================================
+    # 2. ANIMATED LINE CHART - Market Share Race
+    # ===================================================================
+    if "Market Share Race" in sections:
+        st.header("2 — Market Share Race")
+        if not tiktok_mode:
+            st.caption("Animated line chart showing market share shifts month-over-month across competitors.")
+
+        _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
+        _line_w = 5 if tiktok_mode else 3
+        _marker_s = 7 if tiktok_mode else 4
+
+        # Build frames manually for a cumulative line animation
+        months = ms_df["Month"].unique()
+        companies = ms_df["Company"].unique()
+        frames = []
+        for i in range(1, len(months) + 1):
+            subset = ms_df[ms_df["Month"].isin(months[:i])]
+            frames.append(go.Frame(
+                data=[
+                    go.Scatter(
+                        x=subset[subset["Company"] == c]["Month"],
+                        y=subset[subset["Company"] == c]["Market Share (%)"],
+                        mode="lines+markers",
+                        name=c,
+                        line=dict(width=_line_w, color=_colors[j % len(_colors)]),
+                        marker=dict(size=_marker_s),
+                    )
+                    for j, c in enumerate(companies)
+                ],
+                name=months[i - 1],
+            ))
+
+        init = ms_df[ms_df["Month"] == months[0]]
+        fig_ms = go.Figure(
             data=[
                 go.Scatter(
-                    x=subset[subset["Company"] == c]["Month"],
-                    y=subset[subset["Company"] == c]["Market Share (%)"],
+                    x=init[init["Company"] == c]["Month"],
+                    y=init[init["Company"] == c]["Market Share (%)"],
                     mode="lines+markers",
                     name=c,
                     line=dict(width=_line_w, color=_colors[j % len(_colors)]),
@@ -340,249 +569,193 @@ if "Market Share Race" in sections:
                 )
                 for j, c in enumerate(companies)
             ],
-            name=months[i - 1],
-        ))
+            frames=frames,
+            layout=go.Layout(
+                title="Monthly Market Share Evolution",
+                xaxis=dict(title="Month", range=[months[0], months[-1]]),
+                yaxis=dict(title="Market Share (%)", range=[0, 50]),
+                updatemenus=[dict(
+                    type="buttons", showactive=False, y=1.15, x=0.5, xanchor="center",
+                    buttons=[
+                        dict(label="Play", method="animate",
+                             args=[None, {"frame": {"duration": animation_speed, "redraw": True},
+                                          "fromcurrent": True, "transition": {"duration": 80}}]),
+                        dict(label="Pause", method="animate",
+                             args=[[None], {"frame": {"duration": 0, "redraw": False},
+                                            "mode": "immediate"}]),
+                    ],
+                )],
+                sliders=[dict(
+                    active=0,
+                    steps=[dict(args=[[m], {"frame": {"duration": animation_speed, "redraw": True},
+                                            "mode": "immediate"}],
+                                method="animate", label=m)
+                           for m in months],
+                    x=0.05, len=0.9, y=-0.05,
+                    currentvalue=dict(prefix="Month: ", font_size=14 if tiktok_mode else 12),
+                )],
+            ),
+        )
+        apply_corporate_style(fig_ms, tiktok=tiktok_mode)
+        fig_ms.update_layout(colorway=_colors)
+        st.plotly_chart(fig_ms, use_container_width=True)
+        _download_section("market_share", "market_share_race.mp4",
+                          partial(market_share_to_mp4, ms_df, animation_speed, tiktok_mode),
+                          tiktok_mode)
+        st.markdown("---")
 
-    init = ms_df[ms_df["Month"] == months[0]]
-    fig_ms = go.Figure(
-        data=[
-            go.Scatter(
-                x=init[init["Company"] == c]["Month"],
-                y=init[init["Company"] == c]["Market Share (%)"],
-                mode="lines+markers",
-                name=c,
-                line=dict(width=_line_w, color=_colors[j % len(_colors)]),
-                marker=dict(size=_marker_s),
-            )
-            for j, c in enumerate(companies)
-        ],
-        frames=frames,
-        layout=go.Layout(
-            title="Monthly Market Share Evolution",
-            xaxis=dict(title="Month", range=[months[0], months[-1]]),
-            yaxis=dict(title="Market Share (%)", range=[0, 50]),
-            updatemenus=[dict(
-                type="buttons", showactive=False, y=1.15, x=0.5, xanchor="center",
-                buttons=[
-                    dict(label="Play", method="animate",
-                         args=[None, {"frame": {"duration": animation_speed, "redraw": True},
-                                      "fromcurrent": True, "transition": {"duration": 80}}]),
-                    dict(label="Pause", method="animate",
-                         args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                        "mode": "immediate"}]),
-                ],
-            )],
-            sliders=[dict(
-                active=0,
-                steps=[dict(args=[[m], {"frame": {"duration": animation_speed, "redraw": True},
-                                        "mode": "immediate"}],
-                            method="animate", label=m)
-                       for m in months],
-                x=0.05, len=0.9, y=-0.05,
-                currentvalue=dict(prefix="Month: ", font_size=14 if tiktok_mode else 12),
-            )],
-        ),
-    )
-    apply_corporate_style(fig_ms, tiktok=tiktok_mode)
-    fig_ms.update_layout(colorway=_colors)
-    st.plotly_chart(fig_ms, use_container_width=True)
-    _download_section("market_share", "market_share_race.mp4",
-                      partial(market_share_to_mp4, ms_df, animation_speed, tiktok_mode),
-                      tiktok_mode)
-    st.markdown("---")
+    # ===================================================================
+    # 3. ANIMATED BUBBLE CHART - Employee Metrics
+    # ===================================================================
+    if "Employee Bubble Chart" in sections:
+        st.header("3 — Employee Metrics Bubble Chart")
+        if not tiktok_mode:
+            st.caption("Animated scatter showing headcount vs satisfaction per department. Bubble size = attrition rate.")
 
-# ===================================================================
-# 3. ANIMATED BUBBLE CHART - Employee Metrics
-# ===================================================================
-if "Employee Bubble Chart" in sections:
-    st.header("3 - Employee Metrics Bubble Chart")
-    if not tiktok_mode:
-        st.caption("Animated scatter showing headcount vs satisfaction per department. Bubble size = attrition rate.")
+        _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
+        fig_emp = px.scatter(
+            emp_df,
+            x="Headcount",
+            y="Satisfaction (1-5)",
+            size="Attrition Rate (%)",
+            color="Department",
+            animation_frame="Quarter Label",
+            hover_name="Department",
+            size_max=55 if tiktok_mode else 45,
+            range_x=[30, emp_df["Headcount"].max() * 1.15],
+            range_y=[2.3, 5.2],
+            template=CORPORATE_TEMPLATE,
+            color_discrete_sequence=_colors,
+            title="Headcount vs Satisfaction (bubble = attrition rate)",
+        )
+        fig_emp.update_layout(
+            updatemenus=_play_pause_buttons(animation_speed),
+        )
+        apply_corporate_style(fig_emp, tiktok=tiktok_mode)
+        st.plotly_chart(fig_emp, use_container_width=True)
+        _download_section("employee", "employee_bubble.mp4",
+                          partial(employee_bubble_to_mp4, emp_df, animation_speed, tiktok_mode),
+                          tiktok_mode)
+        st.markdown("---")
 
-    _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
-    fig_emp = px.scatter(
-        emp_df,
-        x="Headcount",
-        y="Satisfaction (1-5)",
-        size="Attrition Rate (%)",
-        color="Department",
-        animation_frame="Quarter Label",
-        hover_name="Department",
-        size_max=55 if tiktok_mode else 45,
-        range_x=[30, emp_df["Headcount"].max() * 1.15],
-        range_y=[2.3, 5.2],
-        template=CORPORATE_TEMPLATE,
-        color_discrete_sequence=_colors,
-        title="Headcount vs Satisfaction (bubble = attrition rate)",
-    )
-    fig_emp.update_layout(
-        updatemenus=[dict(
-            type="buttons", showactive=False, y=1.15, x=0.5, xanchor="center",
-            buttons=[
-                dict(label="Play", method="animate",
-                     args=[None, {"frame": {"duration": animation_speed, "redraw": True},
-                                  "fromcurrent": True}]),
-                dict(label="Pause", method="animate",
-                     args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                    "mode": "immediate"}]),
-            ],
-        )],
-    )
-    apply_corporate_style(fig_emp, tiktok=tiktok_mode)
-    st.plotly_chart(fig_emp, use_container_width=True)
-    _download_section("employee", "employee_bubble.mp4",
-                      partial(employee_bubble_to_mp4, emp_df, animation_speed, tiktok_mode),
-                      tiktok_mode)
-    st.markdown("---")
+    # ===================================================================
+    # 4. ANIMATED SCATTER - Product KPIs
+    # ===================================================================
+    if "Product KPI Scatter" in sections:
+        st.header("4 — Product KPI Exploration")
+        if not tiktok_mode:
+            st.caption("Weekly animated scatter: DAU vs Conversion Rate. Bubble size = team size, color = product.")
 
-# ===================================================================
-# 4. ANIMATED SCATTER - Product KPIs
-# ===================================================================
-if "Product KPI Scatter" in sections:
-    st.header("4 - Product KPI Exploration")
-    if not tiktok_mode:
-        st.caption("Weekly animated scatter: DAU vs Conversion Rate. Bubble size = team size, color = product.")
+        _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
+        kpi_df = generate_product_kpis()
+        fig_kpi = px.scatter(
+            kpi_df,
+            x="DAU",
+            y="Conversion Rate (%)",
+            size="Team Size",
+            color="Product",
+            animation_frame="Week Label",
+            hover_data=["Avg Latency (ms)"],
+            size_max=50 if tiktok_mode else 40,
+            range_x=[0, kpi_df["DAU"].max() * 1.15],
+            range_y=[0, kpi_df["Conversion Rate (%)"].max() * 1.25],
+            template=CORPORATE_TEMPLATE,
+            color_discrete_sequence=_colors,
+            title="DAU vs Conversion Rate Over Time",
+        )
+        fig_kpi.update_layout(
+            updatemenus=_play_pause_buttons(animation_speed),
+        )
+        apply_corporate_style(fig_kpi, tiktok=tiktok_mode)
+        st.plotly_chart(fig_kpi, use_container_width=True)
+        _download_section("product_kpi", "product_kpi.mp4",
+                          partial(product_kpi_to_mp4, kpi_df, animation_speed, tiktok_mode),
+                          tiktok_mode)
+        st.markdown("---")
 
-    _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
-    kpi_df = generate_product_kpis()
-    fig_kpi = px.scatter(
-        kpi_df,
-        x="DAU",
-        y="Conversion Rate (%)",
-        size="Team Size",
-        color="Product",
-        animation_frame="Week Label",
-        hover_data=["Avg Latency (ms)"],
-        size_max=50 if tiktok_mode else 40,
-        range_x=[0, kpi_df["DAU"].max() * 1.15],
-        range_y=[0, kpi_df["Conversion Rate (%)"].max() * 1.25],
-        template=CORPORATE_TEMPLATE,
-        color_discrete_sequence=_colors,
-        title="DAU vs Conversion Rate Over Time",
-    )
-    fig_kpi.update_layout(
-        updatemenus=[dict(
-            type="buttons", showactive=False, y=1.15, x=0.5, xanchor="center",
-            buttons=[
-                dict(label="Play", method="animate",
-                     args=[None, {"frame": {"duration": animation_speed, "redraw": True},
-                                  "fromcurrent": True}]),
-                dict(label="Pause", method="animate",
-                     args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                    "mode": "immediate"}]),
-            ],
-        )],
-    )
-    apply_corporate_style(fig_kpi, tiktok=tiktok_mode)
-    st.plotly_chart(fig_kpi, use_container_width=True)
-    _download_section("product_kpi", "product_kpi.mp4",
-                      partial(product_kpi_to_mp4, kpi_df, animation_speed, tiktok_mode),
-                      tiktok_mode)
-    st.markdown("---")
+    # ===================================================================
+    # 5. ANIMATED BAR RACE - Regional Sales
+    # ===================================================================
+    if "Regional Sales Bar Race" in sections:
+        st.header("5 — Regional Sales Bar Race")
+        if not tiktok_mode:
+            st.caption("Animated horizontal bar chart racing through yearly regional sales.")
 
-# ===================================================================
-# 5. ANIMATED BAR RACE - Regional Sales
-# ===================================================================
-if "Regional Sales Bar Race" in sections:
-    st.header("5 - Regional Sales Bar Race")
-    if not tiktok_mode:
-        st.caption("Animated horizontal bar chart racing through yearly regional sales.")
+        _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
+        reg_df = generate_regional_sales()
+        reg_df = reg_df.sort_values(["Year", "Sales ($M)"], ascending=[True, True])
 
-    _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
-    reg_df = generate_regional_sales()
-    reg_df = reg_df.sort_values(["Year", "Sales ($M)"], ascending=[True, True])
+        fig_bar = px.bar(
+            reg_df,
+            x="Sales ($M)",
+            y="Region",
+            color="Region",
+            animation_frame="Year",
+            orientation="h",
+            range_x=[0, reg_df["Sales ($M)"].max() * 1.15],
+            template=CORPORATE_TEMPLATE,
+            color_discrete_sequence=_colors,
+            title="Regional Sales Race ($M)",
+            text="Sales ($M)",
+        )
+        _text_size = 18 if tiktok_mode else None
+        fig_bar.update_traces(
+            texttemplate="%{text:.0f}", textposition="outside",
+            textfont=dict(size=_text_size) if tiktok_mode else {},
+        )
+        fig_bar.update_layout(
+            yaxis=dict(categoryorder="total ascending"),
+            showlegend=False,
+            updatemenus=_play_pause_buttons(animation_speed * 3, 400),
+        )
+        apply_corporate_style(fig_bar, tiktok=tiktok_mode)
+        st.plotly_chart(fig_bar, use_container_width=True)
+        _download_section("bar_race", "regional_bar_race.mp4",
+                          partial(bar_race_to_mp4, reg_df, animation_speed * 3, tiktok_mode),
+                          tiktok_mode)
+        st.markdown("---")
 
-    fig_bar = px.bar(
-        reg_df,
-        x="Sales ($M)",
-        y="Region",
-        color="Region",
-        animation_frame="Year",
-        orientation="h",
-        range_x=[0, reg_df["Sales ($M)"].max() * 1.15],
-        template=CORPORATE_TEMPLATE,
-        color_discrete_sequence=_colors,
-        title="Regional Sales Race ($M)",
-        text="Sales ($M)",
-    )
-    _text_size = 18 if tiktok_mode else None
-    fig_bar.update_traces(
-        texttemplate="%{text:.0f}", textposition="outside",
-        textfont=dict(size=_text_size) if tiktok_mode else {},
-    )
-    fig_bar.update_layout(
-        yaxis=dict(categoryorder="total ascending"),
-        showlegend=False,
-        updatemenus=[dict(
-            type="buttons", showactive=False, y=1.15, x=0.5, xanchor="center",
-            buttons=[
-                dict(label="Play", method="animate",
-                     args=[None, {"frame": {"duration": animation_speed * 3, "redraw": True},
-                                  "fromcurrent": True, "transition": {"duration": 400}}]),
-                dict(label="Pause", method="animate",
-                     args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                    "mode": "immediate"}]),
-            ],
-        )],
-    )
-    apply_corporate_style(fig_bar, tiktok=tiktok_mode)
-    st.plotly_chart(fig_bar, use_container_width=True)
-    _download_section("bar_race", "regional_bar_race.mp4",
-                      partial(bar_race_to_mp4, reg_df, animation_speed * 3, tiktok_mode),
-                      tiktok_mode)
-    st.markdown("---")
+    # ===================================================================
+    # 6. ANIMATED FUNNEL - Sales Pipeline
+    # ===================================================================
+    if "Sales Funnel Animation" in sections:
+        st.header("6 — Sales Funnel Animation")
+        if not tiktok_mode:
+            st.caption("Animated bar chart showing sales funnel stages evolving month-over-month.")
 
-# ===================================================================
-# 6. ANIMATED FUNNEL - Sales Pipeline
-# ===================================================================
-if "Sales Funnel Animation" in sections:
-    st.header("6 - Sales Funnel Animation")
-    if not tiktok_mode:
-        st.caption("Animated bar chart showing the sales funnel stages evolving month-over-month.")
+        _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
+        funnel_df = generate_funnel_data()
+        funnel_df = funnel_df.sort_values(["Month", "Stage Order"])
 
-    _colors = TIKTOK_COLORS if tiktok_mode else CORPORATE_COLORS
-    funnel_df = generate_funnel_data()
-    funnel_df = funnel_df.sort_values(["Month", "Stage Order"])
-
-    fig_funnel = px.bar(
-        funnel_df,
-        x="Count",
-        y="Stage",
-        color="Stage",
-        animation_frame="Month Label",
-        orientation="h",
-        range_x=[0, funnel_df["Count"].max() * 1.15],
-        template=CORPORATE_TEMPLATE,
-        color_discrete_sequence=_colors,
-        title="Sales Funnel Progression",
-        text="Count",
-    )
-    _text_size = 18 if tiktok_mode else None
-    fig_funnel.update_traces(
-        texttemplate="%{text:,.0f}", textposition="outside",
-        textfont=dict(size=_text_size) if tiktok_mode else {},
-    )
-    fig_funnel.update_layout(
-        yaxis=dict(categoryorder="array",
-                   categoryarray=list(reversed(["Leads", "Qualified", "Proposal", "Negotiation", "Closed Won"]))),
-        showlegend=False,
-        updatemenus=[dict(
-            type="buttons", showactive=False, y=1.15, x=0.5, xanchor="center",
-            buttons=[
-                dict(label="Play", method="animate",
-                     args=[None, {"frame": {"duration": animation_speed * 2, "redraw": True},
-                                  "fromcurrent": True, "transition": {"duration": 200}}]),
-                dict(label="Pause", method="animate",
-                     args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                    "mode": "immediate"}]),
-            ],
-        )],
-    )
-    apply_corporate_style(fig_funnel, tiktok=tiktok_mode)
-    st.plotly_chart(fig_funnel, use_container_width=True)
-    _download_section("funnel", "sales_funnel.mp4",
-                      partial(funnel_to_mp4, funnel_df, animation_speed * 2, tiktok_mode),
-                      tiktok_mode)
+        fig_funnel = px.bar(
+            funnel_df,
+            x="Count",
+            y="Stage",
+            color="Stage",
+            animation_frame="Month Label",
+            orientation="h",
+            range_x=[0, funnel_df["Count"].max() * 1.15],
+            template=CORPORATE_TEMPLATE,
+            color_discrete_sequence=_colors,
+            title="Sales Funnel Progression",
+            text="Count",
+        )
+        _text_size = 18 if tiktok_mode else None
+        fig_funnel.update_traces(
+            texttemplate="%{text:,.0f}", textposition="outside",
+            textfont=dict(size=_text_size) if tiktok_mode else {},
+        )
+        fig_funnel.update_layout(
+            yaxis=dict(categoryorder="array",
+                       categoryarray=list(reversed(["Leads", "Qualified", "Proposal", "Negotiation", "Closed Won"]))),
+            showlegend=False,
+            updatemenus=_play_pause_buttons(animation_speed * 2, 200),
+        )
+        apply_corporate_style(fig_funnel, tiktok=tiktok_mode)
+        st.plotly_chart(fig_funnel, use_container_width=True)
+        _download_section("funnel", "sales_funnel.mp4",
+                          partial(funnel_to_mp4, funnel_df, animation_speed * 2, tiktok_mode),
+                          tiktok_mode)
 
 # ---------------------------------------------------------------------------
 # Footer
@@ -591,7 +764,7 @@ st.markdown("---")
 _footer_color = "#555" if tiktok_mode else "#6C757D"
 st.markdown(
     f"<div style='text-align:center; color:{_footer_color}; font-size:0.85rem;'>"
-    "Built with Streamlit + Plotly | Dummy data for demonstration purposes"
+    "Built with Streamlit + Plotly"
     "</div>",
     unsafe_allow_html=True,
 )
