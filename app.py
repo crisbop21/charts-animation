@@ -227,6 +227,82 @@ def _build_user_chart(df: pd.DataFrame, config: dict, speed: int,
 
 
 # ---------------------------------------------------------------------------
+# Template helpers for the upload flow
+# ---------------------------------------------------------------------------
+_TEMPLATE_COLUMNS = {
+    "Bar Race": ["Animation Frame", "Category", "Value"],
+    "Line Chart": ["Animation Frame", "X Axis", "Y Axis", "Group"],
+    "Area Chart": ["Animation Frame", "X Axis", "Y Axis", "Group"],
+    "Scatter / Bubble": ["Animation Frame", "X Axis", "Y Axis", "Color", "Size"],
+}
+
+
+def _generate_template_csv(chart_type: str) -> str:
+    """Return sample CSV content for the chosen chart type."""
+    if chart_type == "Bar Race":
+        return (
+            "Animation Frame,Category,Value\n"
+            "2020,North America,500\n"
+            "2020,Europe,380\n"
+            "2020,Asia Pacific,290\n"
+            "2020,Latin America,120\n"
+            "2021,North America,550\n"
+            "2021,Europe,420\n"
+            "2021,Asia Pacific,340\n"
+            "2021,Latin America,145\n"
+            "2022,North America,610\n"
+            "2022,Europe,460\n"
+            "2022,Asia Pacific,400\n"
+            "2022,Latin America,170\n"
+        )
+    if chart_type in ("Line Chart", "Area Chart"):
+        return (
+            "Animation Frame,X Axis,Y Axis,Group\n"
+            "2022,Jan,120,Product A\n"
+            "2022,Feb,135,Product A\n"
+            "2022,Mar,150,Product A\n"
+            "2022,Jan,90,Product B\n"
+            "2022,Feb,95,Product B\n"
+            "2022,Mar,110,Product B\n"
+            "2023,Jan,160,Product A\n"
+            "2023,Feb,175,Product A\n"
+            "2023,Mar,190,Product A\n"
+            "2023,Jan,115,Product B\n"
+            "2023,Feb,125,Product B\n"
+            "2023,Mar,140,Product B\n"
+        )
+    # Scatter / Bubble
+    return (
+        "Animation Frame,X Axis,Y Axis,Color,Size\n"
+        "Q1 2023,50000,5.2,Platform A,80\n"
+        "Q1 2023,30000,3.8,Platform B,50\n"
+        "Q1 2023,15000,7.1,Platform C,30\n"
+        "Q2 2023,55000,5.5,Platform A,85\n"
+        "Q2 2023,32000,4.0,Platform B,52\n"
+        "Q2 2023,18000,7.5,Platform C,32\n"
+        "Q3 2023,60000,5.8,Platform A,90\n"
+        "Q3 2023,35000,4.3,Platform B,55\n"
+        "Q3 2023,22000,7.8,Platform C,35\n"
+    )
+
+
+def _config_for_chart_type(chart_type: str) -> dict:
+    """Return a column-mapping config dict for _build_user_chart."""
+    if chart_type == "Bar Race":
+        return dict(type="bar", animation="Animation Frame",
+                    category="Category", value="Value", color="Category")
+    if chart_type == "Line Chart":
+        return dict(type="line", animation="Animation Frame",
+                    x="X Axis", y="Y Axis", color="Group")
+    if chart_type == "Area Chart":
+        return dict(type="area", animation="Animation Frame",
+                    x="X Axis", y="Y Axis", color="Group")
+    # Scatter / Bubble
+    return dict(type="scatter", animation="Animation Frame",
+                x="X Axis", y="Y Axis", color="Color", size="Size")
+
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 st.sidebar.title("Chart Studio")
@@ -246,14 +322,24 @@ st.sidebar.markdown("---")
 # Variables shared across modes
 uploaded_file = None
 user_df = None
-chart_config: dict = {}
+chart_type_label = "Bar Race"
 tiktok_mode = False
 sections: list[str] = []
 
 # ── Upload mode sidebar ──────────────────────────────────────────────
 if data_source == "Upload Your Data":
+    chart_type_label = st.sidebar.selectbox(
+        "Chart Type",
+        ["Bar Race", "Line Chart", "Area Chart", "Scatter / Bubble"],
+    )
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption(
+        "Download the template below, fill it with your data, then upload."
+    )
+
     uploaded_file = st.sidebar.file_uploader(
-        "Upload a CSV or Excel file",
+        "Upload filled template",
         type=["csv", "xlsx", "xls"],
     )
 
@@ -268,74 +354,6 @@ if data_source == "Upload Your Data":
             )
         except Exception as e:
             st.sidebar.error(f"Could not parse file: {e}")
-            user_df = None
-
-    if user_df is not None:
-        all_cols = user_df.columns.tolist()
-        numeric_cols = user_df.select_dtypes(include="number").columns.tolist()
-
-        st.sidebar.subheader("Chart Builder")
-
-        chart_type_label = st.sidebar.selectbox(
-            "Chart Type",
-            ["Bar Race", "Line Chart", "Area Chart", "Scatter / Bubble"],
-        )
-
-        animation_col = st.sidebar.selectbox(
-            "Animation Frame",
-            all_cols,
-            help="Each unique value becomes one animation frame (e.g. Year, Month)",
-        )
-
-        remaining = [c for c in all_cols if c != animation_col]
-        remaining_numeric = [c for c in numeric_cols if c != animation_col]
-
-        if chart_type_label == "Bar Race":
-            category_col = st.sidebar.selectbox("Category (bars)", remaining)
-            value_col = st.sidebar.selectbox(
-                "Value (bar length)",
-                remaining_numeric if remaining_numeric else remaining,
-            )
-            color_col = st.sidebar.selectbox("Color by", remaining)
-            chart_config = dict(
-                type="bar", animation=animation_col,
-                category=category_col, value=value_col, color=color_col,
-            )
-
-        elif chart_type_label in ("Line Chart", "Area Chart"):
-            x_col = st.sidebar.selectbox("X Axis", remaining)
-            y_col = st.sidebar.selectbox(
-                "Y Axis",
-                remaining_numeric if remaining_numeric else remaining,
-            )
-            color_col = st.sidebar.selectbox("Color / Group", remaining)
-            chart_config = dict(
-                type="line" if chart_type_label == "Line Chart" else "area",
-                animation=animation_col, x=x_col, y=y_col, color=color_col,
-            )
-
-        elif chart_type_label == "Scatter / Bubble":
-            x_col = st.sidebar.selectbox(
-                "X Axis",
-                remaining_numeric if remaining_numeric else remaining,
-            )
-            y_options = [c for c in remaining_numeric if c != x_col]
-            if not y_options:
-                y_options = remaining_numeric if remaining_numeric else remaining
-            y_col = st.sidebar.selectbox("Y Axis", y_options)
-            color_col = st.sidebar.selectbox(
-                "Color",
-                remaining if remaining else all_cols,
-            )
-            size_options = ["None"] + [
-                c for c in remaining_numeric if c not in (x_col, y_col)
-            ]
-            size_col = st.sidebar.selectbox("Size (optional)", size_options)
-            chart_config = dict(
-                type="scatter", animation=animation_col,
-                x=x_col, y=y_col, color=color_col,
-                size=None if size_col == "None" else size_col,
-            )
 
 # ── Demo mode sidebar ────────────────────────────────────────────────
 else:
@@ -406,44 +424,59 @@ else:
 if data_source == "Upload Your Data":
     st.title("Chart Studio")
     st.markdown(
-        "Upload your data and create **animated visualizations** instantly. "
-        "Select a CSV or Excel file from the sidebar, map your columns, and press **Play**."
+        "Create **animated visualizations** from your own data. "
+        "Download a CSV template, fill it in, and upload it back."
     )
     st.markdown("---")
 
-    if user_df is not None and chart_config:
-        # Data preview
-        with st.expander("Preview uploaded data", expanded=False):
-            st.dataframe(user_df.head(100), use_container_width=True, hide_index=True)
+    # Template download section
+    template_csv = _generate_template_csv(chart_type_label)
+    fname = chart_type_label.lower().replace(" / ", "_").replace(" ", "_")
+    col_dl, col_info = st.columns([1, 3])
+    col_dl.download_button(
+        f"Download {chart_type_label} Template",
+        template_csv,
+        file_name=f"{fname}_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    col_info.markdown(
+        f"Template columns: **{', '.join(_TEMPLATE_COLUMNS[chart_type_label])}**"
+    )
 
-        # Build and render chart
-        try:
-            fig_user = _build_user_chart(
-                user_df, chart_config, animation_speed, CORPORATE_COLORS,
-            )
-            apply_corporate_style(fig_user, tiktok=False)
-            st.plotly_chart(fig_user, use_container_width=True, key="user_chart")
-        except Exception as e:
+    st.markdown("---")
+
+    if user_df is not None:
+        # Validate required columns
+        required = _TEMPLATE_COLUMNS[chart_type_label]
+        missing = [c for c in required if c not in user_df.columns]
+
+        if missing:
             st.error(
-                f"Could not build chart: {e}\n\n"
-                "Make sure the selected columns are compatible with the chart type."
+                f"Missing required columns: **{', '.join(missing)}**\n\n"
+                f"Your file has: {', '.join(user_df.columns.tolist())}\n\n"
+                "Please download and use the template above."
             )
+        else:
+            # Build and render chart
+            config = _config_for_chart_type(chart_type_label)
+            try:
+                fig_user = _build_user_chart(
+                    user_df, config, animation_speed, CORPORATE_COLORS,
+                )
+                apply_corporate_style(fig_user, tiktok=False)
+                st.plotly_chart(fig_user, use_container_width=True, key="user_chart")
+            except Exception as e:
+                st.error(f"Could not build chart: {e}")
 
-        st.info(
-            "**Tip:** For best results, structure your data with one row per item "
-            "per time period. The animation frame column should contain discrete "
-            "values like years, months, or categories."
-        )
-
-    elif uploaded_file is not None:
-        st.warning("Configure chart settings in the sidebar to generate a visualization.")
+            st.dataframe(user_df, use_container_width=True, hide_index=True)
     else:
-        st.info(
-            "Upload a CSV or Excel file from the sidebar to get started.\n\n"
-            "Your data should have:\n"
-            "- A **time or category column** for animation frames (e.g. Year, Month)\n"
-            "- One or more **numeric columns** for values\n"
-            "- A **grouping column** for colors (e.g. Region, Product)"
+        st.markdown(
+            "**How it works:**\n"
+            "1. Pick a chart type in the sidebar\n"
+            "2. Download the template above\n"
+            "3. Fill it with your data (keep the column headers)\n"
+            "4. Upload the file in the sidebar"
         )
 
 # ===================================================================
